@@ -1,11 +1,10 @@
 -module(mod_read_markers_sql).
--author("hermann.mayer92@gmail.com").
 -behaviour(mod_read_markers).
--compile([{parse_transform, ejabberd_sql_pt}]).
+
+%-compile([{parse_transform, ejabberd_sql_pt}]).
 -export([init/2, get_last/3, store_last/4, increment_unseen/3]).
 
 -include("mod_read_markers.hrl").
--include("ejabberd.hrl").
 -include("logger.hrl").
 -include("xmpp.hrl").
 -include("ejabberd_sql_pt.hrl").
@@ -16,7 +15,7 @@ init(_Host, _Opts) ->
 %% This function is dedicated to read a database record of the last read
 %% message for a given user/room combination. When the lookup fails we deliver
 %% no last message details, but an zero count for unseen messages.
--spec get_last(binary(), binary(), binary()) -> any().
+%-spec get_last(binary(), binary(), binary()) -> any().
 get_last(LServer, RoomJid, UserJid) ->
   Query = ?SQL("SELECT @(last_message_id)d, "
                "@(last_message_at)d, @(unseen_messages)d "
@@ -44,7 +43,7 @@ get_last(LServer, RoomJid, UserJid) ->
 
 %% This function writes a new row to the last read messages database in order
 %% to persist the acknowledgement.
--spec store_last(binary(), binary(), binary(), non_neg_integer()) -> any().
+%-spec store_last(binary(), binary(), binary(), non_neg_integer()) -> any().
 store_last(LServer, RoomJid, UserJid, Id) ->
   if
     Id == 0 -> Now = 0;
@@ -67,9 +66,12 @@ store_last(LServer, RoomJid, UserJid, Id) ->
 %% This function increments the last unseen message counter for the given
 %% user/room combination. In case there is no read message record yet, we
 %% create a new one and increment the unseen counter afterwards.
--spec increment_unseen(binary(), binary(), binary()) -> any().
+%-spec increment_unseen(binary(), binary(), binary()) -> any().
 increment_unseen(LServer, RoomJid, UserJid) ->
   Result = get_last(LServer, RoomJid, UserJid),
+
+  ?DEBUG("sql:increment_unseen - get_last:Result ~p", [Result]),
+
   case Result of
     %% In case now read message record was found, we create a new one and
     %% increment the unseen messages counter accordingly. This will result in
@@ -77,16 +79,23 @@ increment_unseen(LServer, RoomJid, UserJid) ->
     not_found ->
       store_last(LServer, RoomJid, UserJid, 0),
       increment_unseen(LServer, RoomJid, UserJid);
+
     %% When we found a read message record, no matter if acknowledged or not we
     %% increment the unseen counter.
-    {acked, #db_entry{} = Row} -> increment_unseen_row(LServer, Row);
-    {unacked, #db_entry{} = Row} -> increment_unseen_row(LServer, Row);
+    {acked, #db_entry{} = Row} ->
+        ?DEBUG("ACKED DB ENTRY ~p", [Row]),
+        increment_unseen_row(LServer, Row);
+
+    {unacked, #db_entry{} = Row} ->
+        ?DEBUG("UNACKED DB ENTRY ~p", [Row]),
+        increment_unseen_row(LServer, Row);
+
     %% In case of database failures we just stop doing anything.
     _ -> ok
   end.
 
 %% Increment the unseen counter on an actual read message record.
--spec increment_unseen_row(binary(), #db_entry{}) -> any().
+%-spec increment_unseen_row(binary(), #db_entry{}) -> any().
 increment_unseen_row(LServer, #db_entry{user_jid = UserJid,
                                         room_jid = RoomJid,
                                         unseen = Unseen}) ->
@@ -99,6 +108,6 @@ increment_unseen_row(LServer, #db_entry{user_jid = UserJid,
 
 %% Convert the given integer to an Erlang timestamp. We assume the given
 %% timestamp is in micro seconds.
--spec integer_to_timestamp(non_neg_integer()) -> erlang:timestamp().
+%-spec integer_to_timestamp(non_neg_integer()) -> erlang:timestamp().
 integer_to_timestamp(Int) ->
   {Int div 1000000000000, Int div 1000000 rem 1000000, Int rem 100000}.
