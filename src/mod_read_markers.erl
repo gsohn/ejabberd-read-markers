@@ -1,15 +1,15 @@
 -module(mod_read_markers).
 -author("hermann.mayer92@gmail.com").
--behaviour(gen_mod).
--export([%% ejabberd module API
-         start/2, stop/1, reload/3, mod_opt_type/1, depends/2,
-         %% Database
-         get_last/2, store_last/3, increment_unseen/2,
-         %% Hooks
-         on_muc_iq/2, on_muc_message/3
-        ]).
 
--include("ejabberd.hrl").
+%-define(ejabberd_debug, true).
+
+-behaviour(gen_mod).
+
+-export([start/2, stop/1, reload/3, mod_opt_type/1, mod_options/1, depends/2,
+   get_last/2, store_last/3, increment_unseen/2,
+   on_muc_iq/2, on_muc_message/3]).
+
+%%-include("ejabberd.hrl").
 -include("logger.hrl").
 -include("xmpp.hrl").
 -include("mod_muc_room.hrl").
@@ -31,7 +31,8 @@
 -spec start(binary(), gen_mod:opts()) -> ok.
 start(Host, Opts) ->
   %% Initialize the database module
-  Mod = gen_mod:db_mod(Host, Opts, ?MODULE),
+  Mod = gen_mod:db_mod(Opts, ?MODULE),
+  %%Mod = gen_mod:db_mod(Host, Opts, ?MODULE),
   Mod:init(Host, Opts),
   %% Register the custom XMPP codec
   xmpp:register_codec(hg_read_markers),
@@ -41,7 +42,7 @@ start(Host, Opts) ->
   %% Run the MUC message hook after mod_mam (50)
   ejabberd_hooks:add(muc_filter_message, Host, ?MODULE, on_muc_message, 51),
   %% Log the boot up
-  ?INFO_MSG("[RM] Start read markers (v~s) for ~s", [?MODULE_VERSION, Host]),
+  %%?INFO_MSG("[RM] Start read markers (v~s) for ~s", [?MODULE_VERSION, Host]),
   ok.
 
 %% Stop the module, and deregister the XMPP codec and all hooks as well as the
@@ -106,20 +107,29 @@ on_muc_iq(IQ, _MUCState) -> IQ.
 on_muc_message(#message{from = Sender, meta = Meta} = Packet,
                #state{jid = Room, affiliations = Affiliations},
                _FromNick) ->
+
   %% Extract and prepare the message details which are required to increment
   %% the unseen messages for all room members (except the sender) and to
   %% acknowledge the senders last read message.
   Id = maps:get(stanza_id, Meta),
+
   %% Acknowledge the message to be seen by the sender. It's fine to assume the
   %% sender saw his very own message.
   store_last(Room, Sender, Id),
+
   %% Filter all members, except the sender for an increment of their unseen
   %% messages for the message room.
-  Members = maps:remove(bare_jid(Sender),
-                        affiliations_to_jid_list(Affiliations)),
+  Members = maps:to_list(maps:remove(bare_jid(Sender), Affiliations)),
+
+  ?DEBUG("Mod read markers: Members => ~p", [Members]),
+
   %% Increment the unseen message counter for all room members.
-  maps:fold(fun(_BareJid, User, ok) -> increment_unseen(Room, User) end,
-            ok, Members),
+  lists:foreach(fun({{User, Host, Resource}, _Aff}) ->
+                Jid = jid:make(User, Host, Resource),
+                increment_unseen(Room, Jid)
+              end,
+              Members),
+
   %% We do not filter, we listen only.
   Packet;
 
@@ -146,7 +156,7 @@ store_last(#jid{} = Room, #jid{lserver = LServer} = User, Id) ->
 %% create a new one and increment the unseen counter afterwards.
 -spec increment_unseen(jid(), jid()) -> any().
 increment_unseen(#jid{} = Room, #jid{lserver = LServer} = User) ->
-  Mod = gen_mod:db_mod(LServer, ?MODULE),
+  Mod = gen_mod:db_mod(LServer, mod_read_markers),
   Mod:increment_unseen(LServer, bare_jid(Room), bare_jid(User)).
 
 %% Logs when we see a read message ack request.
@@ -174,17 +184,33 @@ bare_jid(#jid{} = Jid) -> jid:encode(jid:remove_resource(Jid)).
 
 %% Convert the given affiliation dictionary to a map of bare JID's (binary) as
 %% keys and their corresponding +jid()+ records.
--spec affiliations_to_jid_list(?TDICT) -> map().
-affiliations_to_jid_list(Dict) ->
-  lists:foldl(fun({{User, Host, Resource}, _Aff}, Map) ->
-                Jid = jid:make(User, Host, Resource),
-                maps:put(bare_jid(Jid), Jid, Map)
-              end, #{}, dict:to_list(Dict)).
+%-spec affiliations_to_jid_list(dict) -> map().
+%affiliations_to_jid_list(dict) ->
+  %%lists:foldl(fun({{User, Host, Resource}, _Aff}, Map) ->
+  %%              Jid = jid:make(User, Host, Resource),
+  %%              maps:put(bare_jid(Jid), Jid, Map)
+  %%            end, #{}, dict:to_list(dict)).
+%  JidsList = [],
+%  lists:foldl(fun({{User, Host, Resource}, _Aff}, Map) ->
+%                Jid = jid:make(User, Host, Resource),
+%                dict:append(bare_jid(Jid), Jid, Map)
+%              end,
+%              dict:new(), JidsList).
 
 %% Some ejabberd custom module API fullfilments
 depends(_Host, _Opts) -> [{mod_muc, hard}].
 
-mod_opt_type(db_type) -> fun(T) -> ejabberd_config:v_db(?MODULE, T) end;
+mod_options(Host) ->
+    [{db_type, ejabberd_config:default_db(Host, ?MODULE)}].
+
+%%mod_opt_type(db_type) -> fun(T) -> ejabberd_config:v_db(?MODULE, T) end;
+
+mod_opt_type(db_type) ->
+    econf:db_type(?MODULE);
+
 %% TODO: http://bit.ly/2LU3jto
-%% mod_opt_type(_) -> [db_type].
-mod_opt_type(_) -> [].
+%%mod_opt_type(_) -> [db_type].
+%%mod_opt_type(_) -> [].
+%%mod_opt_type(db_type) -> fun(T) -> ejabberd_config:v_db(?MODULE, T) end;
+mod_opt_type(_) -> [db_type].
+
